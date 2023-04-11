@@ -137,12 +137,24 @@ def main():
     #         "validation":"/local-scratch1/data/qkun/tod_aug/aug_data/flan-t5-xxl/dialog_aug_0.json",
     #         "test":"/local-scratch1/data/qkun/tod_aug/aug_data/flan-t5-xxl/dialog_aug_0.json",
     # })
+    # data_name="MULTIWOZ2_2"
+    # data_name="SGD"
+    # data_dir="/local/data/qkun/tod_aug/SGD/ori_data/"
+    data_ori_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/ori_data/"
+    # data_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/aug_data/flan-t5-xxl"
+    if data_args.aug_model == "ori":
+        train_data_path = os.path.join(data_ori_dir, "dialog_train.json")
+    else:
+        data_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/aug_data/"
+        train_data_path = os.path.join(data_dir, data_args.aug_model, "dialog_v0.json")
+
+    data_dir=data_ori_dir
     raw_datasets = load_dataset(
         "json", 
         data_files={
-            "train":"./aug/flan-t5-xl/dialog_aug_0.json",
-            "validation":"./aug/flan-t5-xl/dialog_aug_0.json",
-            "test":"./aug/flan-t5-xl/dialog_aug_0.json",
+            "train": train_data_path,
+            "validation": os.path.join(data_ori_dir, "dialog_val.json"),
+            "test": os.path.join(data_ori_dir, "dialog_test.json"),
     })
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -210,8 +222,8 @@ def main():
     def preprocess_function(examples):
         inputs, targets = [], []
         for i in range(len(examples[utt_column_name])):
-            if examples[context_column_name][i] and examples[dst_column_name][i]:
-                inputs.append(examples[context_column_name][i] + " <USER> " + examples[utt_column_name][i])
+            if examples[context_column_name][i] and examples[dst_column_name][i] and examples[utt_column_name][i]:
+                inputs.append(examples[context_column_name][i] + " User: " + examples[utt_column_name][i])
                 targets.append(examples[dst_column_name][i])
 
         inputs = [prefix + inp for inp in inputs]
@@ -393,7 +405,7 @@ def main():
                 with open(output_prediction_file, "w") as writer:
                     writer.write("\n".join(predictions))
 
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}
+    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "dst"}
     if data_args.dataset_name is not None:
         kwargs["dataset_tags"] = data_args.dataset_name
         if data_args.dataset_config_name is not None:

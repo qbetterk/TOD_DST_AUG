@@ -20,15 +20,16 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2Se
 # from zero_shot.utils import tokenize_constraints
 # from constraint.constraint_seeker import _generate
 DST_SPLIT = ",, "
+
 class Augmentation(object):
-    def __init__(self) -> None:
-        self.data_dir = "./sgd/train"
-        self.save_dir = "/local-scratch1/data/qkun/tod_aug/aug_data/"
+    def __init__(self, args) -> None:
+        self.data_dir = "/local/data/qkun/dataset/processed/Task-Oriented/"
+        self.data_name = args.data_name
+        self.save_dir = "/local/data/qkun/tod_aug/"
         self.batch_size = 1
         self.beam_size = 2
-        self.model_name = "flan-t5-xl"
-        print(f"Using model: {self.model_name} ......")
-        self.load_model()
+        self.model_card = args.model_card
+        self.model_name = self.model_card.split("/")[0]
 
 
     def _load_json(self, path=None):
@@ -49,10 +50,13 @@ class Augmentation(object):
 
 
     def _load_dir_json(self, dir_path=None):
-        if dir_path is None or not os.path.exists(dir_path): return None
+        if dir_path is None or not os.path.exists(dir_path): 
+            raise IOError('Folder does not exist: %s ...' % dir_path)
         total_data = [] # assume data is a list of dialogs
+        print(f"Loading data from {dir_path} ...")
         for filename in os.listdir(dir_path):
-            if filename in ["schema.json"]: continue
+            if filename in ["schema.json", "dialog_v0.json"]: continue
+            if not filename.startswith("dialog"): continue
             if not filename.endswith(".json"): continue
             file_path = os.path.join(dir_path, filename)
             data = self._load_json(path=file_path)
@@ -86,8 +90,9 @@ class Augmentation(object):
 
 
     def load_model(self):
-        self.tokenizer = AutoTokenizer.from_pretrained(f"google/{self.model_name}")
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(f"google/{self.model_name}")
+        print(f"Loading model: {self.model_card} ......")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_card)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_card)
         # self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
         # self.model = AutoModelForCausalLM.from_pretrained("gpt2")
 
@@ -97,11 +102,12 @@ class Augmentation(object):
 
 
     def aug_hf(self):
-        data = self._load_dir_json(self.data_dir)
+        self.load_model()
+        data = self._load_dir_json(os.path.join(self.data_dir, self.data_name, "train"))
+        # save_path = os.path.join(self.save_dir, self.data_name, "aug_data", self.model_name)
+        save_path = os.path.join(self.save_dir, self.data_name, "aug_data", self.model_name, "no_slot")
         # random.shuffle(data)
-        aug_data = []
-        file_idx = 5
-        sample_num = 5
+        aug_data, file_idx, sample_num, total_turn_num = [], 0, 5, 0
         for dial in tqdm(data):
             for turn in dial["log"][1:]:
                 self.model.eval()
@@ -118,6 +124,7 @@ class Augmentation(object):
                     const_list.extend(list(dst_dict[domain].values()))
                 const_list = list(set(const_list))
                 if const_list:
+                    continue
                     const_list_ids = self.tokenizer(const_list, add_special_tokens=False).input_ids
                     outputs = self.model.generate(
                         input_ids,
@@ -128,38 +135,158 @@ class Augmentation(object):
                         remove_invalid_values=True,
                     )
                 else:
-                    continue
-                    # outputs = self.model.generate(
-                    #     input_ids,
-                    #     num_beams=5,
-                    #     num_return_sequences=sample_num,
-                    #     no_repeat_ngram_size=1,
-                    #     remove_invalid_values=True,
-                    # )
+                    # continue
+                    outputs = self.model.generate(
+                        input_ids,
+                        num_beams=5,
+                        num_return_sequences=sample_num,
+                        no_repeat_ngram_size=1,
+                        remove_invalid_values=True,
+                    )
                 for sample_id in range(sample_num):
-                    new_turn = dict(turn)
+                    new_turn = {}
+                    new_turn["turn id"] = turn["turn id"]
+                    new_turn["dialog history"] = turn["dialog history"]
+                    new_turn["dst"] = turn["dst"]
                     # replace with aug utt
                     new_turn["user utterance"] = self.tokenizer.decode(outputs[sample_id], skip_special_tokens=True)
                     # adding dialog id
                     new_turn["dialog_id"] = dial["original dialog id"]
                     new_turn["sample_id"] = sample_id
                     aug_data.append(new_turn)
+                    total_turn_num += 1
                     
-                    if len(aug_data) > 100000:
-                        # random.shuffle(aug_data)
-                        file_name = f"dialog_aug_{file_idx}.json"
-                        self._save_json(aug_data, dir_path=os.path.join(self.save_dir, self.model_name), file_name=file_name)
-                        aug_data = []
-                        file_idx += 1
+                    # if len(aug_data) > 100000:
+                    #     # random.shuffle(aug_data)
+                    #     file_name = f"dialog_{file_idx}.json"
+                    #     self._save_json(aug_data, dir_path=save_path, file_name=file_name)
+                    #     aug_data = []
+                    #     file_idx += 1
+                        
+        file_name = f"dialog_{file_idx}.json"
+        self._save_json(aug_data, dir_path=save_path, file_name=file_name)
+        print(f"Saving {total_turn_num} turns in total ... ")
 
-        file_name = f"dialog_aug_{file_idx}.json"
-        self._save_json(aug_data, dir_path=os.path.join(self.save_dir, self.model_name), file_name=file_name)
 
+class PostProcessData(Augmentation):
+    def __init__(self, args) -> None:
+        super().__init__(args)
+
+    def reformat_unaug_data(self):
+        for mode in ["train", "val", "test"]:
+            data = self._load_dir_json(os.path.join(self.data_dir, self.data_name, mode))
+            save_dir = os.path.join(self.save_dir, self.data_name, "ori_data")
+            turn_level_data, file_idx, total_turn_num = [], 0, 0
+            for dial in tqdm(data):
+                for turn in dial["log"][1:]:
+                    new_turn = {}
+                    new_turn["dialog_id"] = dial["original dialog id"]
+                    new_turn["turn id"] = turn["turn id"]
+                    new_turn["user utterance"] = turn["user utterance"]
+                    new_turn["dialog history"] = turn["dialog history"]
+                    new_turn["dst"] = turn["dst"]
+                    turn_level_data.append(new_turn)
+                    total_turn_num += 1
+            file_name = f"dialog_{mode}.json"
+            self._save_json(turn_level_data, dir_path=save_dir, file_name=file_name)
+            print(f"Saving {total_turn_num} turns in total ... ")
+
+    
+    def combine_wiwo_slot(self):
+        """
+        The augmentation is conducted for turn wi/wo slots separately
+        """
+        for data_name in ["SGD", "MULTIWOZ2_2"]:
+            aug_dir = os.path.join(self.save_dir, data_name, "aug_data")
+            for model_name in os.listdir(aug_dir):
+                data_path_wi_slot = os.path.join(aug_dir, model_name)
+                data_path_wo_slot = os.path.join(data_path_wi_slot, "no_slot")
+                if not os.path.exists(data_path_wi_slot) or not os.path.exists(data_path_wo_slot): continue
+                data_wi_slot = self._load_dir_json(data_path_wi_slot)
+                data_wo_slot = self._load_dir_json(data_path_wo_slot)
+                data = data_wi_slot + data_wo_slot
+                random.shuffle(data)
+                os.makedirs(os.path.join(data_path_wi_slot, "splited_data"), exist_ok=True)
+                for file_name in os.listdir(data_path_wi_slot):
+                    if file_name in ["dialog_v0.json", "splited_data"]: continue
+                    os.rename(os.path.join(data_path_wi_slot, file_name), os.path.join(data_path_wi_slot, "splited_data", file_name))
+                self._save_json(data=data, dir_path=data_path_wi_slot, file_name="dialog_v0.json")
+
+    def combine_num_data(self):
+        """
+        combine dialog_x.json into one file, 
+        since combination has been done in combine_wiwo_slot() for aug_data
+        this functin only targets at ori_dta
+        """
+        for data_name in ["SGD", "MULTIWOZ2_2"]:
+            data_dir = os.path.join(self.save_dir, data_name, "ori_data")
+            for mode in ["train", "val", "test"]:
+                data = self._load_dir_json(os.path.join(data_dir, mode))
+                random.shuffle(data)
+                self._save_json(data=data, dir_path=data_dir, file_name=f"dialog_{mode}.json")
+
+
+    def remove_lowq_data(self):
+        """
+        remove those turns that constrained decoding does not actually generate 
+        constraint tokens
+        only for v0 version
+        """
+        for data_name in ["SGD", "MULTIWOZ2_2"]:
+            aug_dir = os.path.join(self.save_dir, data_name, "aug_data")
+            for model_name in os.listdir(aug_dir):
+                data = self._load_json(os.path.join(aug_dir, model_name, "dialog_v0.json"))
+                clean_data = []
+                for turn in data:
+                    new_turn = {}
+                    new_turn["dialog_id"] = turn["dialog_id"]
+                    new_turn["turn id"] = turn["turn id"]
+                    new_turn["user utterance"] = turn["user utterance"]
+                    new_turn["dialog history"] = turn["dialog history"]
+                    new_turn["dst"] = turn["dst"]
+                    clean_data.append(new_turn)
+                self._save_json(clean_data, os.path.join(aug_dir, model_name), "dialog_v0.json")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--data_name",
+        type=str,
+        default="MULTIWOZ2_2",
+        choices=["MULTIWOZ2_2", "SGD"],
+        help="The name of the dataset to use",
+    )
+    parser.add_argument(
+        "--model_card",
+        type=str,
+        default="flan-t5-base",
+        help="The model card used to load pre-trained model from huggingface",
+    )
+    parser.add_argument(
+        "--act",
+        type=str,
+        default="aug",
+        choices=["aug", "proc"],
+        help="Choose whether to do augmentation or post processing",
+    )
+    args = parser.parse_args()
+    return args
 
 
 def main():
-    aug = Augmentation()
-    aug.aug_hf()
+    args = parse_args()
+    if args.act == "act":
+        aug = Augmentation(args)
+        aug.aug_hf()
+    elif args.act == "proc":
+        proc = PostProcessData(args)
+        # pro.reformat_unaug_data()
+        # proc.combine_wiwo_slot()
+        # pro.combine_num_data()
+        proc.remove_lowq_data()
+    else:
+        print("Skip, since none of the pre-defined action is chosen ...")
 
 
 if __name__ == "__main__":
