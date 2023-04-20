@@ -62,10 +62,16 @@ class DataTrainingArguments:
     lang: Optional[str] = field(default=None, metadata={"help": "Language id for summarization."})
 
     dataset_name: Optional[str] = field(
-        default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
+        default='MULTIWOZ2_2', 
+        metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     aug_model: Optional[str] = field(
-        default=None, metadata={"help": "The data augmented by which model (can also be ori)."}
+        default=None, 
+        metadata={"help": "The data augmented by which model (can also be ori)."}
+    )
+    debug_mode: bool = field(
+        default=False, 
+        metadata={"help": "Whether to use the small set of data for debugging."}
     )
     dataset_config_name: Optional[str] = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}

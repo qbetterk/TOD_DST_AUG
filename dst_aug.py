@@ -19,7 +19,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2Se
 # from zero_shot.topK import topk_huggingface
 # from zero_shot.utils import tokenize_constraints
 # from constraint.constraint_seeker import _generate
-DST_SPLIT = ",, "
+DST_SPLIT = " , "
 
 class Augmentation(object):
     def __init__(self, args) -> None:
@@ -183,13 +183,17 @@ class PostProcessData(Augmentation):
                     new_turn["dialog_id"] = dial["original dialog id"]
                     new_turn["turn id"] = turn["turn id"]
                     new_turn["user utterance"] = turn["user utterance"]
-                    new_turn["dialog history"] = turn["dialog history"]
-                    new_turn["dst"] = turn["dst"]
+                    new_turn["dialog history"] = turn["dialog history"].replace("<USER>", "User:").replace("<SYSTEM>", "System:")
+                    new_turn["dst"] = turn["dst"].replace(",, ", " , ")
                     turn_level_data.append(new_turn)
                     total_turn_num += 1
             file_name = f"dialog_{mode}.json"
             self._save_json(turn_level_data, dir_path=save_dir, file_name=file_name)
+            # save a short version for debugging
+            file_name = f"dialog_{mode}_debug.json"
+            self._save_json(turn_level_data[:100], dir_path=save_dir, file_name=file_name)
             print(f"Saving {total_turn_num} turns in total ... ")
+
 
     
     def combine_wiwo_slot(self):
@@ -281,10 +285,10 @@ def main():
         aug.aug_hf()
     elif args.act == "proc":
         proc = PostProcessData(args)
-        # pro.reformat_unaug_data()
+        proc.reformat_unaug_data()
         # proc.combine_wiwo_slot()
         # pro.combine_num_data()
-        proc.remove_lowq_data()
+        # proc.remove_lowq_data()
     else:
         print("Skip, since none of the pre-defined action is chosen ...")
 

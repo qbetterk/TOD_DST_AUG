@@ -1,36 +1,24 @@
 #!/usr/bin/env python3
 #
-import os, sys, pdb
-import json
-import numpy as np
 import logging
-import nltk
+import os
+import pdb
+import sys
 
-import torch
-import torch.nn as nn
 import datasets
-import transformers
 import evaluate
-from datasets import load_dataset
-from transformers import (
-        Trainer,
-        TrainingArguments,
-        Seq2SeqTrainingArguments,
-        HfArgumentParser,
-        set_seed,
-        AutoConfig,
-        AutoModelForSeq2SeqLM,
-        AutoTokenizer,
-        DataCollatorForSeq2Seq,
-        PreTrainedTokenizerFast,
-        Seq2SeqTrainer,
-        Seq2SeqTrainingArguments,
-)
-from transformers.utils import send_example_telemetry
+import nltk
+import numpy as np
+import transformers
+from datasets import load_dataset, load_metric
+from transformers import (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer,
+                          DataCollatorForSeq2Seq, HfArgumentParser,
+                          Seq2SeqTrainer,
+                          Seq2SeqTrainingArguments, set_seed)
 from transformers.trainer_utils import get_last_checkpoint
+from transformers.utils import send_example_telemetry
 
-from args import ModelArguments, DataTrainingArguments
-
+from args import DataTrainingArguments, ModelArguments
 
 logger = logging.getLogger(__name__)
 
@@ -96,65 +84,25 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Get the datasets: you can either provide your own JSON training and evaluation files (see below)
-    # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
-    # (the dataset will be downloaded automatically from the datasets Hub).
-    #
-    # For translation, only JSON files are supported, with one field named "translation" containing two keys for the
-    # source and target languages (unless you adapt what follows).
-    #
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
-    # if data_args.dataset_name is not None:
-    #     # Downloading and loading a dataset from the hub.
-    #     raw_datasets = load_dataset(
-    #         data_args.dataset_name,
-    #         data_args.dataset_config_name,
-    #         cache_dir=model_args.cache_dir,
-    #         use_auth_token=True if model_args.use_auth_token else None,
-    #     )
-    # else:
-    #     data_files = {}
-    #     if data_args.train_file is not None:
-    #         data_files["train"] = data_args.train_file
-    #         extension = data_args.train_file.split(".")[-1]
-    #     if data_args.validation_file is not None:
-    #         data_files["validation"] = data_args.validation_file
-    #         extension = data_args.validation_file.split(".")[-1]
-    #     if data_args.test_file is not None:
-    #         data_files["test"] = data_args.test_file
-    #         extension = data_args.test_file.split(".")[-1]
-    #     raw_datasets = load_dataset(
-    #         extension,
-    #         data_files=data_files,
-    #         cache_dir=model_args.cache_dir,
-    #         use_auth_token=True if model_args.use_auth_token else None,
-    #     )
-    # raw_datasets = load_dataset(
-    #     "json", 
-    #     data_files={
-    #         "train":"/local-scratch1/data/qkun/tod_aug/aug_data/flan-t5-xxl/dialog_aug_0.json",
-    #         "validation":"/local-scratch1/data/qkun/tod_aug/aug_data/flan-t5-xxl/dialog_aug_0.json",
-    #         "test":"/local-scratch1/data/qkun/tod_aug/aug_data/flan-t5-xxl/dialog_aug_0.json",
-    # })
-    # data_name="MULTIWOZ2_2"
-    # data_name="SGD"
-    # data_dir="/local/data/qkun/tod_aug/SGD/ori_data/"
     data_ori_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/ori_data/"
-    # data_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/aug_data/flan-t5-xxl"
     if data_args.aug_model == "ori":
         train_data_path = os.path.join(data_ori_dir, "dialog_train.json")
     else:
         data_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/aug_data/"
         train_data_path = os.path.join(data_dir, data_args.aug_model, "dialog_v0.json")
-
-    data_dir=data_ori_dir
+    
+    val_file_name = "dialog_val.json"
+    test_file_name = "dialog_test.json"
+    if data_args.debug_mode:
+        train_data_path = train_data_path.replace(".json", "_debug.json")
+        val_file_name = val_file_name.replace(".json", "_debug.json")
+        test_file_name = test_file_name.replace(".json", "_debug.json")
     raw_datasets = load_dataset(
         "json", 
         data_files={
             "train": train_data_path,
-            "validation": os.path.join(data_ori_dir, "dialog_val.json"),
-            "test": os.path.join(data_ori_dir, "dialog_test.json"),
+            "validation": os.path.join(data_ori_dir, val_file_name),
+            "test": os.path.join(data_ori_dir, test_file_name),
     })
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -185,7 +133,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-
+    # pdb.set_trace()
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
     embedding_size = model.get_input_embeddings().weight.shape[0]
@@ -223,7 +171,7 @@ def main():
         inputs, targets = [], []
         for i in range(len(examples[utt_column_name])):
             if examples[context_column_name][i] and examples[dst_column_name][i] and examples[utt_column_name][i]:
-                inputs.append(examples[context_column_name][i] + " User: " + examples[utt_column_name][i])
+                inputs.append(examples[context_column_name][i] + " <User> " + examples[utt_column_name][i])
                 targets.append(examples[dst_column_name][i])
 
         inputs = [prefix + inp for inp in inputs]
@@ -299,7 +247,7 @@ def main():
     )
 
     # Metric
-    metric = evaluate.load("accuracy")
+    metric = load_metric("./metric.py")
 
     def postprocess_text(preds, labels):
         preds = [pred.strip() for pred in preds]
@@ -310,6 +258,7 @@ def main():
         labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
 
         return preds, labels
+
 
     def compute_metrics(eval_preds):
         preds, labels = eval_preds
@@ -324,10 +273,8 @@ def main():
         # Some simple post-processing
         decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
-        result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-        result = {k: round(v * 100, 4) for k, v in result.items()}
-        prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-        result["gen_len"] = np.mean(prediction_lens)
+        result = metric.compute(predictions=decoded_preds, references=decoded_labels)
+
         return result
 
     # Override the decoding parameters of Seq2SeqTrainer
