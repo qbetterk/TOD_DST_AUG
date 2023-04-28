@@ -84,12 +84,11 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    data_ori_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/ori_data/"
-    if data_args.aug_model == "ori":
+    data_ori_dir=f"{data_args.proj_path}/{data_args.dataset_name}/ori_data/"
+    if data_args.aug_model in ["ori", "utt", "utt_nodst", "utt_instruct"]:
         train_data_path = os.path.join(data_ori_dir, "dialog_train.json")
     else:
-        data_dir=f"/local/data/qkun/tod_aug/{data_args.dataset_name}/aug_data/"
-        train_data_path = os.path.join(data_dir, data_args.aug_model, "dialog_v0.json")
+        train_data_path = os.path.join(data_args.data_path, f"dialog_v{data_args.data_version}.json")
     
     val_file_name = "dialog_val.json"
     test_file_name = "dialog_test.json"
@@ -103,7 +102,8 @@ def main():
             "train": train_data_path,
             "validation": os.path.join(data_ori_dir, val_file_name),
             "test": os.path.join(data_ori_dir, test_file_name),
-    })
+        }
+    )
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -157,6 +157,7 @@ def main():
     utt_column_name = "user utterance"
     context_column_name = "dialog history"
     dst_column_name = "dst"
+    goal_column_name = "user_goal"
 
     if data_args.max_seq_length > tokenizer.model_max_length:
         logger.warning(
@@ -171,8 +172,21 @@ def main():
         inputs, targets = [], []
         for i in range(len(examples[utt_column_name])):
             if examples[context_column_name][i] and examples[dst_column_name][i] and examples[utt_column_name][i]:
-                inputs.append(examples[context_column_name][i] + " <User> " + examples[utt_column_name][i])
-                targets.append(examples[dst_column_name][i])
+                if data_args.aug_model == "utt":
+                    inputs.append(examples[context_column_name][i] + " Dialog states: " + examples[dst_column_name][i])
+                    targets.append(examples[utt_column_name][i])
+                elif data_args.aug_model == "utt_nodst":
+                    inputs.append(examples[context_column_name][i])
+                    targets.append(examples[utt_column_name][i])
+                elif data_args.aug_model == "utt_instruct":
+                    inputs.append("User goal: " + examples[goal_column_name][i] + \
+                                  "Dialog context: " + examples[context_column_name][i] + \
+                                  " Dialog states: " + examples[dst_column_name][i])
+                    targets.append(examples[utt_column_name][i])
+                else:
+                    # training for dst model
+                    inputs.append(examples[context_column_name][i] + " User: " + examples[utt_column_name][i])
+                    targets.append(examples[dst_column_name][i])
 
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=max_seq_length, padding=padding, truncation=True)
@@ -247,7 +261,12 @@ def main():
     )
 
     # Metric
-    metric = load_metric("./metric.py")
+    if data_args.aug_model in ["utt", "utt_nodst"]:
+        # finetune aug model, no need to use dst
+        metric = load_metric("rouge")
+    else:
+        # train dst model
+        metric = load_metric("./metric.py")
 
     def postprocess_text(preds, labels):
         preds = [pred.strip() for pred in preds]
@@ -256,7 +275,6 @@ def main():
         # rougeLSum expects newline after each sentence
         preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
         labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
-
         return preds, labels
 
 
@@ -351,6 +369,13 @@ def main():
                 output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
                 with open(output_prediction_file, "w") as writer:
                     writer.write("\n".join(predictions))
+
+                labels = tokenizer.batch_decode(
+                    predict_results.label_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+                )
+                labels = [label.strip() for label in labels]
+                with open(os.path.join(training_args.output_dir, "groundtruth_labels.txt"), "w") as writer:
+                    writer.write("\n".join(labels))
 
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "dst"}
     if data_args.dataset_name is not None:

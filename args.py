@@ -66,8 +66,24 @@ class DataTrainingArguments:
         metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     aug_model: Optional[str] = field(
+        default="ori", 
+        metadata={"help":(
+                    "The data augmented by which model (can also be 'ori', representing the original data)."
+                    "'ori' means no augmentation, using original data for training"
+                    "'utt' or 'utt_xxx' means fine tune aug model, rather than train dst model"
+                 )}
+    )
+    proj_path: Optional[str] = field(
         default=None, 
-        metadata={"help": "The data augmented by which model (can also be ori)."}
+        metadata={"help": "The absolute address of this project"}
+    )
+    data_path: Optional[str] = field(
+        default=None, 
+        metadata={"help": "The absolute address of augmented training data"}
+    )
+    data_version: Optional[str] = field(
+        default=1, 
+        metadata={"help": "The version number of augmented training data"}
     )
     debug_mode: bool = field(
         default=False, 
