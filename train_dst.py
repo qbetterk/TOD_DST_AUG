@@ -10,7 +10,7 @@ import evaluate
 import nltk
 import numpy as np
 import transformers
-from datasets import load_dataset, load_metric
+from datasets import load_dataset, load_metric, Features, Value
 from transformers import (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer,
                           DataCollatorForSeq2Seq, HfArgumentParser,
                           Seq2SeqTrainer,
@@ -92,17 +92,29 @@ def main():
     
     val_file_name = "dialog_val.json"
     test_file_name = "dialog_test.json"
-    if data_args.debug_mode:
-        train_data_path = train_data_path.replace(".json", "_debug.json")
-        val_file_name = val_file_name.replace(".json", "_debug.json")
-        test_file_name = test_file_name.replace(".json", "_debug.json")
+    # if data_args.debug_mode:
+    #     train_data_path = train_data_path.replace(".json", "_debug.json")
+    #     val_file_name = val_file_name.replace(".json", "_debug.json")
+    #     test_file_name = test_file_name.replace(".json", "_debug.json")
+    
+    features = Features({
+        'dialog_id': Value(dtype='string', id=None),
+        'turn id': Value(dtype='int64', id=None),
+        'user utterance': Value(dtype='string', id=None),
+        'dialog history': Value(dtype='string', id=None),
+        'dst': Value(dtype='string', id=None),
+        'user_goal': Value(dtype='string', id=None),
+        'ori_user_utt': Value(dtype='string', id=None),
+        'sample_id': Value(dtype='int64', id=None)
+    })
     raw_datasets = load_dataset(
         "json", 
         data_files={
             "train": train_data_path,
             "validation": os.path.join(data_ori_dir, val_file_name),
             "test": os.path.join(data_ori_dir, test_file_name),
-        }
+        },
+        features=features
     )
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -170,7 +182,8 @@ def main():
 
     def preprocess_function(examples):
         inputs, targets = [], []
-        for i in range(len(examples[utt_column_name])):
+        eg_num = 10 if data_args.debug_mode else len(examples[utt_column_name])
+        for i in range(eg_num):
             if examples[context_column_name][i] and examples[dst_column_name][i] and examples[utt_column_name][i]:
                 if data_args.aug_model == "utt":
                     inputs.append(examples[context_column_name][i] + " Dialog states: " + examples[dst_column_name][i])
@@ -259,9 +272,9 @@ def main():
         label_pad_token_id=label_pad_token_id,
         pad_to_multiple_of=8 if training_args.fp16 else None,
     )
-
+    
     # Metric
-    if data_args.aug_model in ["utt", "utt_nodst"]:
+    if data_args.aug_model in ["utt", "utt_nodst", "utt_instruct"]:
         # finetune aug model, no need to use dst
         metric = load_metric("rouge")
     else:

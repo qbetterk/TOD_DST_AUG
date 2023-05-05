@@ -235,6 +235,9 @@ class Augmentation(object):
  
         file_name = f"dialog_v{self.version}.json"
         self._save_json(aug_data, dir_path=save_path, file_name=file_name)
+        # save a short version for debugging
+        debug_file_name = f"dialog_v{self.version}_debug.json"
+        self._save_json(aug_data[:100], dir_path=save_path, file_name=debug_file_name)
         print(f"Saving {total_turn_num} turns in total ... ")
 
 

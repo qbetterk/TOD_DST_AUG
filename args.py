@@ -85,7 +85,7 @@ class DataTrainingArguments:
         default=1, 
         metadata={"help": "The version number of augmented training data"}
     )
-    debug_mode: bool = field(
+    debug_mode: Optional[bool] = field(
         default=False, 
         metadata={"help": "Whether to use the small set of data for debugging."}
     )
