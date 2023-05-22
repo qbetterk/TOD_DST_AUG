@@ -79,7 +79,15 @@ class DataTrainingArguments:
     )
     data_path: Optional[str] = field(
         default=None, 
-        metadata={"help": "The absolute address of augmented training data"}
+        metadata={"help": "The address of augmented training data"}
+    )
+    data_ori_dir: Optional[str] = field(
+        default=None, 
+        metadata={"help": "The address of original data dir"}
+    )
+    dst_acc: Optional[bool] = field(
+        default=False, 
+        metadata={"help": "Whether to use accumulated dst or just current turn dst"}
     )
     data_version: Optional[str] = field(
         default=1, 

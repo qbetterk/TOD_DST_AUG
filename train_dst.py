@@ -84,25 +84,18 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    data_ori_dir=f"{data_args.proj_path}/{data_args.dataset_name}/ori_data/"
     if data_args.aug_model in ["ori", "utt", "utt_nodst", "utt_instruct"]:
-        train_data_path = os.path.join(data_ori_dir, "dialog_train.json")
+        train_data_path = os.path.join(data_args.data_ori_dir, "dialog_train.json")
     else:
         train_data_path = os.path.join(data_args.data_path, f"dialog_v{data_args.data_version}.json")
-    
-    val_file_name = "dialog_val.json"
-    test_file_name = "dialog_test.json"
-    # if data_args.debug_mode:
-    #     train_data_path = train_data_path.replace(".json", "_debug.json")
-    #     val_file_name = val_file_name.replace(".json", "_debug.json")
-    #     test_file_name = test_file_name.replace(".json", "_debug.json")
-    
+
     features = Features({
         'dialog_id': Value(dtype='string', id=None),
         'turn id': Value(dtype='int64', id=None),
         'user utterance': Value(dtype='string', id=None),
         'dialog history': Value(dtype='string', id=None),
         'dst': Value(dtype='string', id=None),
+        'dst accumulated': Value(dtype='string', id=None),
         'user_goal': Value(dtype='string', id=None),
         'ori_user_utt': Value(dtype='string', id=None),
         'sample_id': Value(dtype='int64', id=None)
@@ -111,8 +104,8 @@ def main():
         "json", 
         data_files={
             "train": train_data_path,
-            "validation": os.path.join(data_ori_dir, val_file_name),
-            "test": os.path.join(data_ori_dir, test_file_name),
+            "validation": os.path.join(data_args.data_ori_dir, "dialog_val.json"),
+            "test": os.path.join(data_args.data_ori_dir, "dialog_test.json"),
         },
         features=features
     )
@@ -170,6 +163,10 @@ def main():
     context_column_name = "dialog history"
     dst_column_name = "dst"
     goal_column_name = "user_goal"
+    if data_args.dst_acc:
+        dst_column_name = "dst accumulated"
+    else:
+        dst_column_name = "dst"
 
     if data_args.max_seq_length > tokenizer.model_max_length:
         logger.warning(
@@ -184,24 +181,24 @@ def main():
         inputs, targets = [], []
         eg_num = 10 if data_args.debug_mode else len(examples[utt_column_name])
         for i in range(eg_num):
-            if examples[context_column_name][i] and examples[dst_column_name][i] and examples[utt_column_name][i]:
-                if data_args.aug_model == "utt":
-                    inputs.append(examples[context_column_name][i] + " Dialog states: " + examples[dst_column_name][i])
-                    targets.append(examples[utt_column_name][i])
-                elif data_args.aug_model == "utt_nodst":
-                    inputs.append(examples[context_column_name][i])
-                    targets.append(examples[utt_column_name][i])
-                elif data_args.aug_model == "utt_instruct":
-                    inputs.append("User goal: " + examples[goal_column_name][i] + \
-                                  "Dialog context: " + examples[context_column_name][i] + \
-                                  " Dialog states: " + examples[dst_column_name][i])
-                    targets.append(examples[utt_column_name][i])
-                else:
-                    # training for dst model
-                    inputs.append(examples[context_column_name][i] + " User: " + examples[utt_column_name][i])
-                    targets.append(examples[dst_column_name][i])
+            if data_args.aug_model == "utt":
+                inputs.append(examples[context_column_name][i] + " Dialog states: " + examples[dst_column_name][i])
+                targets.append(examples[utt_column_name][i])
+            elif data_args.aug_model == "utt_nodst":
+                inputs.append(examples[context_column_name][i])
+                targets.append(examples[utt_column_name][i])
+            elif data_args.aug_model == "utt_instruct":
+                inputs.append(" User goal: " + examples[goal_column_name][i] + \
+                                " Dialog context: " + examples[context_column_name][i] + \
+                                " Dialog states: " + examples[dst_column_name][i])
+                targets.append(examples[utt_column_name][i])
+            else:
+                # training for dst model
+                inputs.append(examples[context_column_name][i] + " User: " + examples[utt_column_name][i])
+                targets.append(examples[dst_column_name][i])
 
         inputs = [prefix + inp for inp in inputs]
+
         model_inputs = tokenizer(inputs, max_length=max_seq_length, padding=padding, truncation=True)
 
         # Tokenize targets with the `text_target` keyword argument
@@ -383,6 +380,7 @@ def main():
                 with open(output_prediction_file, "w") as writer:
                     writer.write("\n".join(predictions))
 
+                predict_results.label_ids[predict_results.label_ids==-100] = 0
                 labels = tokenizer.batch_decode(
                     predict_results.label_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
                 )

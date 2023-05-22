@@ -13,35 +13,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM
-# from zero_shot.init_beam import get_init_candidate
-# from zero_shot.generate import generate, BeamHypotheses
-# from lexical_constraints import init_batch, ConstrainedHypothesis
-# from zero_shot.topK import topk_huggingface
-# from zero_shot.utils import tokenize_constraints
-# from constraint.constraint_seeker import _generate
+
 DST_SPLIT = " , "
 
 class Augmentation(object):
     def __init__(self, args) -> None:
         if os.uname()[1] == "communication":
             self.data_dir = "/local-storage/data/qkun/dataset/processed/Task-Oriented/"
-            self.save_dir = "/local-scratch1/data/qkun/tod_aug/"
         elif os.uname()[1] == "coffee":
             self.data_dir = "/local/data/qkun/dataset/processed/Task-Oriented/"
-            self.save_dir = "/local/data/qkun/tod_aug/"
+        self.save_dir = args.save_dir
         self.data_name = args.data_name
-        if args.model_card_or_path.startswith("ckpt"):
-            self.model_card_or_path = os.path.join(self.save_dir, args.model_card_or_path)
-            self.model_name = args.model_card_or_path.split("/")[1]
-            self.ft_method = args.model_card_or_path.split("/")[-1]
-        else:
-            self.model_card_or_path = args.model_card_or_path
-            self.model_name = self.model_card_or_path.split("/")[-1]
-            self.ft_method = "no_ft"
-        self.version = 1
+        self.model_card_or_path = args.model_card_or_path
+        self.version = args.version
         self.batch_size = args.batch_size
-        self.constraint = args.constraint
-        self.sample_num = 5
+        self.constraint = args.constraint_folder == "constraint_decoding"
+        self.sample_num = args.sample_num
+        self.sample_new_value = args.sample_new_value
+        if self.sample_new_value:
+            self.otgy = self._load_json(os.path.join("dataset", self.data_name, "otgy.json"))
+        self._set_seed(args.seed)
+
+
+    def _set_seed(self, seed):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
 
 
     def _load_json(self, path=None):
@@ -121,8 +118,6 @@ class Augmentation(object):
         dst_dict = {}
         for slot in dst_str.split(DST_SPLIT):
             if not slot: continue
-            if len(slot.split()) < 2:
-                pdb.set_trace()
             dom, slot_type = slot.split()[:2]
             if dom not in dst_dict:
                 dst_dict[dom] = {}
@@ -132,6 +127,21 @@ class Augmentation(object):
             elif dst_dict[dom][slot_type] == "no":
                 dst_dict[dom][slot_type] = f"no {slot_type}"
         return dst_dict
+
+
+    def dict_to_string(self, dst_dict):
+        """
+        dst_dict : {domain: {slot_type: slot_value, ...}, ...}
+        e.g.:
+        {'hotel': {'type': 'guesthouse', 'parking': 'parking', 'internet': 'internet', 'stars': '4'}}"""
+        dst_list= []
+        for domain in dst_dict:
+            for slot_type in dst_dict[domain]:
+                slot_value = dst_dict[domain][slot_type]
+                if slot_value == slot_type: slot_value = "yes"
+                elif slot_value == f"no {slot_type}": slot_value = "no"
+                dst_list.append(f"{domain} {slot_type} {slot_value}")
+        return DST_SPLIT.join(dst_list)
 
 
     def load_model(self):
@@ -149,33 +159,33 @@ class Augmentation(object):
     def aug_hf(self):
         self.load_model()
         self.model.eval()
-        data = self._load_dir_json(os.path.join(self.data_dir, self.data_name, "train"))
-        if self.constraint:
-            constraint_folder = "constraint_decoding"
-        else:
-            constraint_folder = "no_constraint_decoding"
-        save_path = os.path.join(self.save_dir, 
-                                 self.data_name, 
-                                 "aug_data",
-                                 self.ft_method,
-                                 constraint_folder,
-                                 self.model_name)
-        # random.shuffle(data)
-        aug_data, self.sample_num, total_turn_num = [], 5, 0
+
         data_in_turn = {
             "use_constraint": [],
             "no_constraint": [],
         }
-        for dial in data:
-            for turn in dial["log"]:
-                turn["dialog_id"] = dial["original dialog id"]
+        if self.model_card_or_path.split("/")[-1] == "utt_instruct":
+            # user goal is needed, therefore we load data from ./dataset/data_name/ori_data
+            data = self._load_json(os.path.join("dataset", self.data_name, "ori_data/dialog_train.json"))
+            for turn in data:
                 if turn["dst"] and self.constraint:
                     data_in_turn["use_constraint"].append(turn)
                 else:
                     data_in_turn["no_constraint"].append(turn)
+        else:
+            data = self._load_dir_json(os.path.join(self.data_dir, self.data_name, "train"))
+            for dial in data:
+                for turn in dial["log"]:
+                    turn["dialog_id"] = dial["original dialog id"]
+                    if turn["dst"] and self.constraint:
+                        data_in_turn["use_constraint"].append(turn)
+                    else:
+                        data_in_turn["no_constraint"].append(turn)
         len_wi_slot, len_wo_slot = len(data_in_turn["use_constraint"]), len(data_in_turn["no_constraint"])
         print(f"There are totally {len_wi_slot} turns with slots and {len_wo_slot} turns without any slots ... ")
 
+        save_path = self.save_dir
+        aug_data, total_turn_num = [], 0
         # # # Processing turns without slots
         print("Processing turns without slots ... ")
         for i in tqdm(range(0, len(data_in_turn["no_constraint"]), self.batch_size)):
@@ -184,6 +194,8 @@ class Augmentation(object):
                 input_seq = turn["dialog history"].replace("<USER> ", "User: ").replace("<SYSTEM> ", "System: ")
                 if self.model_card_or_path.split("/")[-1] == "utt":
                     input_seq += " Dialog states: " + turn["dst"]
+                if self.model_card_or_path.split("/")[-1] == "utt_instruct":
+                    input_seq = f" User goal: {turn['user_goal']} Dialog context: {input_seq} Dialog states: {turn['dst']}"
                 batch_input.append(input_seq)
             input_tensors = self.tokenizer(batch_input, return_tensors="pt", padding=True, truncation=True)
             input_tensors = input_tensors.to('cuda')
@@ -205,12 +217,17 @@ class Augmentation(object):
         # # # Processing turns with slots
         print("Processing turns with slots ... ")
         for turn in tqdm(data_in_turn["use_constraint"]):
+            # sample new slot values
+            if self.sample_new_value:
+                turn = self._replace_with_new_value(turn)
             # usr_utt, sys_utt, dial_hist = turn["user utterance"], turn["system response"], turn["dialog history"]
-            dial_hist = turn["dialog history"].replace("<USER>", "User:").replace("<SYSTEM>", "System:")
+            input_seq = turn["dialog history"].replace("<USER> ", "User: ").replace("<SYSTEM> ", "System: ")
             if self.model_card_or_path.split("/")[-1] == "utt":
-                dial_hist += " Dialog states: " + turn["dst"]
+                input_seq += " Dialog states: " + turn["dst"]
+            if self.model_card_or_path.split("/")[-1] == "utt_instruct":
+                input_seq = f" User goal: {turn['user_goal']} Dialog context: {input_seq} Dialog states: {turn['dst']}"
             # prompt = "Pretend you are user and talk to a system: "
-            input_ids = self.tokenizer(dial_hist, return_tensors="pt").input_ids
+            input_ids = self.tokenizer(input_seq, return_tensors="pt").input_ids
             input_ids = input_ids.to('cuda')
             # prepare constraints
             dst_dict = self.string_to_dict(turn["dst"])
@@ -237,8 +254,26 @@ class Augmentation(object):
         self._save_json(aug_data, dir_path=save_path, file_name=file_name)
         # save a short version for debugging
         debug_file_name = f"dialog_v{self.version}_debug.json"
-        self._save_json(aug_data[:100], dir_path=save_path, file_name=debug_file_name)
+        self._save_json(aug_data[:50]+aug_data[-50:], dir_path=save_path, file_name=debug_file_name)
         print(f"Saving {total_turn_num} turns in total ... ")
+
+
+    def _replace_with_new_value(self, turn):
+        """
+        dst_dict : {domain: {slot_type: slot_value, ...}, ...}
+        e.g.:
+        {'hotel': {'type': 'guesthouse', 'parking': 'parking', 'internet': 'internet', 'stars': '4'}}
+        """
+        dst_dict = self.string_to_dict(turn["dst"])
+        for domain in dst_dict:
+            for slot_type in dst_dict[domain]:
+                value_old = dst_dict[domain][slot_type]
+                value_new = random.choice(self.otgy[domain][slot_type])
+                turn["dst"] = turn["dst"].replace(f"{domain} {slot_type} {value_old}", 
+                                                    f"{domain} {slot_type} {value_new}")
+                turn["dst accumulated"] = turn["dst accumulated"].replace(f"{domain} {slot_type} {value_old}", 
+                                                                            f"{domain} {slot_type} {value_new}")    
+        return turn
 
 
     def add_new_turn(self, aug_data, total_turn_num, turn, output_seq, batch_id=None):
@@ -247,6 +282,7 @@ class Augmentation(object):
             new_turn["turn id"] = turn["turn id"]
             new_turn["dialog history"] = turn["dialog history"]
             new_turn["dst"] = turn["dst"]
+            new_turn["dst accumulated"] = turn["dst accumulated"]
             new_turn["dialog_id"] = turn["dialog_id"]
             new_turn["ori_user_utt"] = turn["user utterance"]
             new_turn["sample_id"] = sample_id
@@ -272,20 +308,18 @@ class PostProcessData(Augmentation):
             save_dir = os.path.join(self.save_dir, self.data_name, "ori_data")
             turn_level_data, file_idx, total_turn_num = [], 0, 0
             for dial in tqdm(data):
-                for turn in dial["log"][1:]:
+                for turn in dial["log"]:
                     new_turn = {}
                     new_turn["dialog_id"] = dial["original dialog id"]
                     new_turn["turn id"] = turn["turn id"]
-                    new_turn["user utterance"] = turn["user utterance"]
+                    new_turn["user utterance"] = turn["user utterance"].replace("User: ", "")
                     new_turn["dialog history"] = turn["dialog history"].replace("<USER>", "User:").replace("<SYSTEM>", "System:")
-                    new_turn["dst"] = turn["dst"].replace(",, ", " , ")
+                    new_turn["dst"] = turn["dst"].replace(",, ", DST_SPLIT)
+                    new_turn["dst accumulated"] = turn["dst accumulated"].replace(",, ", DST_SPLIT)
                     turn_level_data.append(new_turn)
                     total_turn_num += 1
-            file_name = f"dialog_{mode}.json"
-            self._save_json(turn_level_data, dir_path=save_dir, file_name=file_name)
+            self._save_json(turn_level_data, dir_path=save_dir, file_name=f"dialog_{mode}.json")
             # save a short version for debugging
-            file_name = f"dialog_{mode}_debug.json"
-            self._save_json(turn_level_data[:100], dir_path=save_dir, file_name=file_name)
             print(f"Saving {total_turn_num} turns in total ... ")
 
 
@@ -348,6 +382,29 @@ class PostProcessData(Augmentation):
                 self._save_json(clean_data, dir_path=os.path.join(aug_dir, model_name), file_name="dialog_v0.json")
 
 
+    def add_acc_dst(self):
+        """
+        add accumulated dst annotation based on ori_data/dialog_train.json
+        """
+        aug_path = os.path.join(self.save_dir, self.data_name, "aug_data")
+        ori_data = self._load_json(os.path.join(self.save_dir, self.data_name, "ori_data", "dialog_train.json"))
+        for ft_method in os.listdir(aug_path):
+            if ft_method == "no_ft": continue
+            for constraint in os.listdir(os.path.join(aug_path, ft_method)):
+                for aug_model in os.listdir(os.path.join(aug_path, ft_method, constraint)):
+                    for file_name in os.listdir(os.path.join(aug_path, ft_method, constraint, aug_model)):
+                        if file_name.endswith("debug.json"): continue
+                        data_path = os.path.join(aug_path, ft_method, constraint, aug_model, file_name)
+                        data = self._load_json(data_path)
+                        for turn in tqdm(data):
+                            for ori_turn in ori_data:
+                                if turn["dialog_id"] == ori_turn["dialog_id"] and \
+                                    turn["turn id"] == ori_turn["turn id"]:
+                                    turn["dst accumulated"] = ori_turn["dst accumulated"]
+                        self._save_json(data, file_path=data_path)
+                        self._save_json(data[:10], file_path=data_path.replace(".json", "_debug.json"))
+
+
     def normalize(self):
         """
 
@@ -355,12 +412,6 @@ class PostProcessData(Augmentation):
         e.g. <USER> --> User:
              remove redundant "User:" in 
         """
-        # # for aug data
-        # for aug_model in os.listdir(os.path.join(self.save_dir, self.data_name, "aug_data")):
-        #     aug_path = os.path.join(self.save_dir, self.data_name, "aug_data", aug_model)
-        #     for data_version in os.listdir(os.path.join(aug_path)):
-        #         if not data_version.endswith("json"): continue
-        #         self.normalize_update(os.path.join(aug_path, data_version))
 
         # for ori data
         for mode in ["train", "test", "val"]:
@@ -373,7 +424,7 @@ class PostProcessData(Augmentation):
         for turn in tqdm(data):
             turn["dialog history"] = turn["dialog history"].replace("<USER>", "User:").replace("<SYSTEM>", "System:")
             turn["user utterance"] = turn["user utterance"].replace("User: ", "")
-            turn["dst"] = turn["dst"].replace(",, ", " , ")
+            turn["dst"] = turn["dst"].replace(",, ", DST_SPLIT)
         self._save_json(data, file_path=data_path)
 
     
@@ -388,6 +439,35 @@ class PostProcessData(Augmentation):
             instruct_str = instruct_str.replace("</span>", "").replace("<span class='emphasis'>", "")
             turn["user_goal"] = instruct_str
         self._save_json(data, file_path=data_path)
+
+        
+    def sample_data(self):
+        """
+        sample the first 10 dialog as example
+        """
+        for mode in ["train", "val", "test"]:
+            save_dir = os.path.join(self.save_dir, self.data_name, "ori_data")
+            data = self._load_json(os.path.join(save_dir, f"dialog_{mode}.json"))
+            self._save_json(data[:10], dir_path=save_dir, file_name=f"dialog_{mode}_debug.json")
+
+
+    def create_otgy(self):
+        data = self._load_dir_json(os.path.join(self.save_dir, self.data_name, "ori_data"))
+        save_dir = os.path.join(self.save_dir, self.data_name)
+        otgy = {}
+        for turn in data:
+            for slot in turn["dst"].split(DST_SPLIT):
+                if not slot: continue
+                domain, slot_type = slot.split()[0], slot.split()[1]
+                slot_value = " ".join(slot.split()[2:])
+                if slot_value == "dontcare": continue
+                if domain not in otgy:
+                    otgy[domain] = {}
+                if slot_type not in otgy[domain]:
+                    otgy[domain][slot_type] = []
+                if slot_value not in otgy[domain][slot_type]:
+                    otgy[domain][slot_type].append(slot_value)
+        self._save_json(otgy, dir_path=save_dir, file_name= "otgy.json")
 
 
 def parse_args():
@@ -413,8 +493,10 @@ def parse_args():
         help="Choose whether to do augmentation or post processing or have a user_utt_generation format",
     )
     parser.add_argument(
-        "--constraint",
-        action='store_true',
+        "--constraint_folder",
+        type=str,
+        default="constraint_decoding",
+        choices=["constraint_decoding", "no_constraint_decoding"],
         help="Choose whether to do constraint decoding or not (for data augmentation)",
     )
     parser.add_argument(
@@ -422,6 +504,36 @@ def parse_args():
         type=int,
         default=32,
         help="Batch size for no_constraint augmentation",
+    )
+    parser.add_argument(
+        "--version",
+        type=int,
+        default=2,
+        help="version for augmentation data",
+    )
+    parser.add_argument(
+        "--sample_num",
+        type=int,
+        default=5,
+        help="number of augmented utt for each turn",
+    )
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default=None,
+        help="path to save augmented data",
+    )
+    parser.add_argument(
+        "--sample_new_value",
+        type=bool,
+        default=True,
+        help="Choose whether to sample new values for augmentation",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed",
     )
     args = parser.parse_args()
     return args
@@ -435,14 +547,16 @@ def main():
     elif args.act == "proc":
         proc = PostProcessData(args)
         # proc.reformat_unaug_data()
-        # proc.combine_wiwo_slot()
-        # pro.combine_num_data()
-        # proc.remove_lowq_data()
+        # # proc.combine_wiwo_slot()
+        # # pro.combine_num_data()
+        # # proc.remove_lowq_data()
         proc.normalize()
+        # proc.add_acc_dst()
+        proc.sample_data()
+        # proc.create_otgy()
     else:
         print("Skip, since none of the pre-defined action is chosen ...")
 
 
 if __name__ == "__main__":
     main()
-
