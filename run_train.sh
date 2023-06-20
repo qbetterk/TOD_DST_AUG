@@ -17,7 +17,7 @@ if [ $HOSTNAME == "communication" ]; then
         proj_path=/local-scratch1/data/qkun/tod_aug
 elif [ $HOSTNAME == "coffee" ]; then
         # ****************************** script for coffee ****************************** 
-        export CUDA_VISIBLE_DEVICES=6
+        export CUDA_VISIBLE_DEVICES=7
         export HF_DATASETS_CACHE=/local/data/shared/huggingface_cache/datasets/
         export TRANSFORMERS_CACHE=/local/data/shared/huggingface_cache/transformers/
         export HF_CACHE_HOME=/local/data/shared/huggingface_cache
@@ -26,7 +26,7 @@ elif [ $HOSTNAME == "coffee" ]; then
 fi
 if [ $action == "train_dst_model" ]; then
         # # # train dst model with ori/aug data
-        model_name=flan-t5-large
+        model_name=flan-t5-xl
         dataset_name=MULTIWOZ2_2        # "SGD", "MULTIWOZ2_2"
         ft_method=utt_instruct                   # no_ft utt utt_nodst utt_instruct
         constraint=constraint_decoding  # constraint_decoding no_constraint_decoding constraint_decoding_v3
@@ -34,8 +34,8 @@ if [ $action == "train_dst_model" ]; then
         # aug_model=ori                   # "ori", "flan-t5-large", "flan-t5-xl", "flan-t5-xxl"
         dst_acc=True
         mode=test
-        for aug_model in flan-t5-base flan-t5-xl; do
-                for constraint in constraint_decoding_v3 ; do
+        for aug_model in flan-t5-base flan-t5-large; do
+                for constraint in constraint_decoding; do
                         for ft_method in utt utt_nodst utt_instruct ; do
                 # for dst_acc in True False ; do
                                 data_ori_dir=dataset/${dataset_name}/ori_data/
@@ -74,16 +74,14 @@ if [ $action == "train_dst_model" ]; then
                                                 --do_train \
                                                 --do_eval \
                                                 --num_train_epochs 2 \
-                                                --save_strategy steps \
-                                                --eval_steps 500 \
-                                                --logging_steps 100 \
+                                                --save_strategy epoch \
                                                 --per_device_train_batch_size=32 \
                                                 --gradient_accumulation_steps 8 \
                                                 --per_device_eval_batch_size=32 \
                                                 --learning_rate 1e-4 \
                                                 --auto_find_batch_size \
                                                 --load_best_model_at_end \
-                                                --evaluation_strategy steps \
+                                                --evaluation_strategy epoch \
                                                 --metric_for_best_model jga \
                                                 --save_total_limit 0 \
                                                 --overwrite_output_dir \

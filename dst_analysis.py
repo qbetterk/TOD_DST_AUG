@@ -154,62 +154,104 @@ class Analysis(object):
         constraint="no_constraint_decoding"  # constraint_decoding, no_constraint_decoding
         aug_model="flan-t5-large"        # "ori", "flan-t5-large", "flan-t5-xl", "flan-t5-xxl"
 
-        # for constraint in ["constraint_decoding", "no_constraint_decoding"]:
-        #     for aug_model in ["flan-t5-base", "flan-t5-large"]:
-        #         for ft_method in ["utt", "utt_nodst", "utt_instruct"]:
-        ori_data_path = os.path.join(proj_path, dataset_name, "ori_data", "dialog_train.json")
-        aug_data_path = os.path.join(proj_path, dataset_name, "aug_data", ft_method, constraint, aug_model, "dialog_v2.json")
-        aug_data = self._load_json(ori_data_path)
+        for constraint in ["constraint_decoding", "no_constraint_decoding"]:
+            for aug_model in ["flan-t5-xl"]:
+                for ft_method in ["utt", "utt_instruct"]:
+                    ori_data_path = os.path.join(proj_path, dataset_name, "ori_data", "dialog_train.json")
+                    aug_data_path = ori_data_path
+                    aug_data_path = os.path.join(proj_path, dataset_name, "aug_data", ft_method, constraint, aug_model, "dialog_v2.json")
+                    aug_data = self._load_json(aug_data_path)
 
-        nodst_count = 0
-        not_included_count = 0
-        for turn in aug_data:
-            dst = turn["dst"]
-            if not dst:
-                nodst_count += 1
-            else:
-                for slot in dst.split(" , "):
-                    slot_val = " ".join(slot.split()[2:])
-                    if slot_val not in turn["user utterance"].lower():
-                        if slot_val in ["yes", "no", "dontcare"]:
-                            continue
-                        if slot.split()[1].startswith("book"):
-                            continue
-                        # print(slot)
-                        # print(turn["user utterance"])
-                        # pdb.set_trace()
-                        not_included_count += 1
-                        break
-        print("*"*30)
-        print(f"checking aug file {aug_data_path}")
-        print(f"there are total {nodst_count} out of {len(aug_data)} turn does not have dst slots")
-        print(f"{not_included_count/(len(aug_data)-nodst_count)}% ({not_included_count} turns) does not include all slot value in utt")
+                    nodst_count = 0
+                    not_included_count = 0
+                    for turn in aug_data:
+                        dst = turn["dst"]
+                        if not dst:
+                            nodst_count += 1
+                        else:
+                            for slot in dst.split(" , "):
+                                slot_val = " ".join(slot.split()[2:])
+                                if slot_val not in turn["user utterance"].lower():
+                                    if slot_val in ["yes", "no", "dontcare"]:
+                                        continue
+                                    if slot.split()[1].startswith("book"):
+                                        continue
+                                    # print(slot)
+                                    # print(turn["user utterance"])
+                                    # pdb.set_trace()
+                                    not_included_count += 1
+                                    break
+                    print("*"*30)
+                    print(f"checking aug file {aug_data_path}")
+                    print(f"there are total {nodst_count} out of {len(aug_data)} turn does not have dst slots")
+                    print(f"{not_included_count/(len(aug_data)-nodst_count)}% ({not_included_count} turns) does not include all slot value in utt")
 
 
 class ResultAnalysis(Analysis):
     def __init__(self) -> None:
         super().__init__()        
-        model_name="flan-t5-base"
+        model_name="flan-t5-large"
         dataset_name="MULTIWOZ2_2"        # "SGD", "MULTIWOZ2_2"
         ft_method="utt_instruct"                   # no_ft utt utt_nodst utt_instruct
         constraint="no_constraint_decoding"  # constraint_decoding, no_constraint_decoding
-        aug_model="flan-t5-base"
+        aug_model="flan-t5-large"
+        dst_acc = False
         version=2
         self.result_dir = f"./tod_aug/ckpt_dst_{version}/{model_name}/{dataset_name}/{ft_method}--{constraint}--{aug_model}"
-        self.result_dir = "tod_aug/ckpt_dst_2/flan-t5-base/MULTIWOZ2_2/utt_instruct--no_constraint_decoding--flan-t5-base"
+        # self.result_dir = "tod_aug/ckpt_dst_2/flan-t5-base/MULTIWOZ2_2/utt_instruct--constraint_decoding--flan-t5-base"
+        # self.result_dir = f"tod_aug/ckpt_dst_2/{model_name}/MULTIWOZ2_2/ori"
+        if dst_acc:
+            self.result_dir += "--dst_acc"
         
 
     def analysis(self):
-        predictions = self._load_txt(os.path.join(self.result_dir, "generated_predictions.txt"))
-        labels = self._load_txt(os.path.join(self.result_dir, "groundtruth_labels.txt"))
-        assert (len(predictions)==len(labels),
-                "The prediction and label are expected to share the same length.")
-        jga = 0
-        for idx, label in enumerate(labels):
-            if set(label.split(", ")) == set(predictions[idx].split(", ")):
-                jga += 1
-        jga /= len(labels)
-        print(jga)
+        
+        model_name="flan-t5-large"
+        dataset_name="MULTIWOZ2_2"        # "SGD", "MULTIWOZ2_2"
+        ft_method="utt_instruct"                   # no_ft utt utt_nodst utt_instruct
+        constraint="no_constraint_decoding"  # constraint_decoding, no_constraint_decoding
+        aug_model="flan-t5-large"
+        aug_model="ori"
+        dst_acc = False
+        if aug_model == "ori":     
+            for model_name in ["flan-t5-base", "flan-t5-large"]:                       
+                self.result_dir = f"tod_aug/ckpt_dst_2/{model_name}/MULTIWOZ2_2/ori"
+                if dst_acc:
+                    self.result_dir += "--dst_acc"
+                if not os.path.exists(self.result_dir): continue
+                print("*"*30)
+                print(f"The result for {self.result_dir} is : ")
+                predictions = self._load_txt(os.path.join(self.result_dir, "generated_predictions.txt"))
+                labels = self._load_txt(os.path.join(self.result_dir, "groundtruth_labels.txt"))
+                # assert len(predictions)==len(labels), f"The prediction and label are expected to share the same length. {len(predictions)} vs {len(labels)}"
+                jga = 0
+                for idx, label in enumerate(labels):
+                    if idx >= len(predictions): continue
+                    if set(label.split(", ")) == set(predictions[idx].split(", ")):
+                        jga += 1
+                jga /= len(labels)
+                print(jga)
+        else:
+            for model_name in ["flan-t5-base", "flan-t5-large"]:
+                for ft_method in ["utt", "utt_nodst", "utt_instruct"]:
+                    for aug_model in ["flan-t5-base", "flan-t5-large"]:
+                        for constraint in ["no_constraint_decoding", "constraint_decoding"]:
+                            self.result_dir = f"./tod_aug/ckpt_dst_2/{model_name}/{dataset_name}/{ft_method}--{constraint}--{aug_model}"
+                            if dst_acc:
+                                self.result_dir += "--dst_acc"
+                            if not os.path.exists(self.result_dir): continue
+                            print("*"*30)
+                            print(f"The result for {self.result_dir} is : ")
+                            predictions = self._load_txt(os.path.join(self.result_dir, "generated_predictions.txt"))
+                            labels = self._load_txt(os.path.join(self.result_dir, "groundtruth_labels.txt"))
+                            # assert len(predictions)==len(labels), f"The prediction and label are expected to share the same length. {len(predictions)} vs {len(labels)}"
+                            jga = 0
+                            for idx, label in enumerate(labels):
+                                if idx >= len(predictions): continue
+                                if set(label.split(", ")) == set(predictions[idx].split(", ")):
+                                    jga += 1
+                            jga /= len(labels)
+                            print(jga)
 
 
 

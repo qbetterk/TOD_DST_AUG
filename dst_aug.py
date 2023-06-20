@@ -319,7 +319,6 @@ class PostProcessData(Augmentation):
                     turn_level_data.append(new_turn)
                     total_turn_num += 1
             self._save_json(turn_level_data, dir_path=save_dir, file_name=f"dialog_{mode}.json")
-            # save a short version for debugging
             print(f"Saving {total_turn_num} turns in total ... ")
 
 
@@ -402,7 +401,6 @@ class PostProcessData(Augmentation):
                                     turn["turn id"] == ori_turn["turn id"]:
                                     turn["dst accumulated"] = ori_turn["dst accumulated"]
                         self._save_json(data, file_path=data_path)
-                        self._save_json(data[:10], file_path=data_path.replace(".json", "_debug.json"))
 
 
     def normalize(self):
